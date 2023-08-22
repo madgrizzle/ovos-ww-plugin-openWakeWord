@@ -31,10 +31,20 @@ class OwwHotwordPlugin(HotWordEngine):
         self.model = openwakeword.Model(
             wakeword_model_paths=self.config.get('models', [i for i in pretrained_models if key_phrase in i]),
             custom_verifier_models=self.config.get('custom_verifier_models', {}),
-            custom_verifier_threshold=self.config.get('custom_verifier_threshold', 0.1)
+            custom_verifier_threshold=self.config.get('custom_verifier_threshold', 0.1),
+            inference_framework=self.config.get('inference_framework', "onnx"),
+            enable_speex_noise_suppression=self.config.get('speex_noise_suppression', False)
         )
         self.model_names = list(self.model.models.keys())
-
+        
+        """OpenWakeWord expects audio chunks to be multiples of 1280-samples (2560-bytes).  Any audio that is a remainder
+        is dropped from analysis resulting in poor performance of the wake word detector.
+        """
+        
+        chunk_size = Configuration().get("listener",{}).get("microphone", {}).get("chunk_size")
+        if chunk_size is not None and chunk_size%2560 != 0:
+            LOG.warning(f"chunk_size ({chunk_size}) is not a multiple of 2560 bytes and will result in poor openWakeWord performance.")
+        
         # Define short buffer for audio to ensure correct chunk sizes
         self.audio_buffer = []
         self.has_found = False
@@ -42,15 +52,15 @@ class OwwHotwordPlugin(HotWordEngine):
     def update(self, chunk):
         """
         Predict on input audio using openWakeWord models.
-        openWakeWord requires that audio be provided in chunks of 1280 samples,
+        openWakeWord requires that audio be provided in chunks of 1280 samples (2560 bytes)
         so a small buffer is used to ensure proper sizes.
         """
         audio_frame = np.frombuffer(chunk, dtype=np.int16).tolist()
         self.audio_buffer.extend(audio_frame)  # build up the buffer until it has enough samples
 
-        if len(self.audio_buffer) >= 1280:
+        if len(self.audio_buffer) >= 2560:
             # Get prediction from openWakeWord
-            prediction = self.model.predict(self.audio_buffer)
+            prediction = self.model.predict(np.asarray(self.audio_buffer, dtype=np.int16))
 
             # Clear the buffer after each prediction
             self.audio_buffer = []
